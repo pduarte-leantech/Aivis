@@ -7,7 +7,7 @@ Avaliação realizada em 25/10/2026. As notas abaixo são uma autoavaliação t�
 - `npm ci`: instalação repetível pelo lockfile, Node.js 24.
 - `npm run typecheck`: passou.
 - `npm run lint`: passou, sem alertas.
-- `npm test`: **32 testes passaram**, em 5 arquivos. Validação de entrada, formatos, corpos limitados, autorização, isolamento, tratamento da IA, PDF, versão, aprovação e SQL.
+- `npm test`: **33 testes passaram**, em 5 arquivos. Validação de entrada, formatos, preservação de símbolos clínicos em PDF, corpos limitados, autorização, isolamento, tratamento da IA, PDF, versão, aprovação e SQL.
 - `npm run build`: build de produção passou.
 - `npm run test:e2e`: **12 testes passaram**: navegação, busca, edição/salvamento/aprovação, recusa, criação/upload/análise simulada, equipe, chaves, ausência de overflow, axe WCAG A/AA e respostas de segurança; versões desktop e móvel.
 - `npm audit --omit=dev --audit-level=moderate`: nenhuma vulnerabilidade conhecida reportada nas dependências de runtime no momento da execução. Não é pentest.
@@ -41,3 +41,7 @@ Os testes de banco aplicam a migração em PostgreSQL embutido (PGlite), com sub
 6. Antes do uso assistencial, realizar avaliação clínica, jurídica/regulatória, MFA/SSO e revisão independente de segurança. Os testes de software não substituem essas etapas.
 
 Os comandos e critérios de aceitação ficam em [DEPLOY.md](DEPLOY.md). O relatório deve ser atualizado com resultados reais, preservando a distinção entre aprovado, falhou e não executado.
+
+## Publicação e repositório
+
+O código foi enviado à branch `main` de `pduarte-leantech/Aivis`. A Vercel confirmou o deploy de produção em https://aivis-ten-theta.vercel.app, no escopo `pedro-borges-projects`. O primeiro deploy foi criado por CLI; a vinculação automática com GitHub retornou falta de permissão da instalação Vercel sobre o repositório. O teste HTTP remoto deste ambiente foi bloqueado pela política de egress (CONNECT 403); isso é distinto de uma falha HTTP observada na aplicação. O build e os fluxos locais foram exercitados; confirmar também a navegação no domínio publicado.

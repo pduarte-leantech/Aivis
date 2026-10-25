@@ -11,7 +11,8 @@ import {
 } from '@/lib/auth';
 import { caseSchema, reportSchema, uploadSchema, isFileSignature } from '@/lib/validation';
 import { boundedBody, readJson } from '@/lib/body';
-import { generatePdf } from '@/lib/pdf';
+import { generateServerPdf } from '@/lib/pdf-server';
+import { PdfContentError } from '@/lib/pdf';
 import { analyzeWithGrok } from '@/lib/grok';
 import type { ClinicalCase } from '@/lib/types';
 import { exposeCase } from '@/lib/serialization';
@@ -319,7 +320,7 @@ async function handle(request: Request, { params }: { params: Promise<{ path: st
         await audit(a, 'report.edit_requested', id, { revision: body.revision });
         const { data, error } = await a.db
           .from('cases')
-          .update({ report: body.report })
+          .update({ report: body.report, last_edited_by: a.userId })
           .eq('id', id)
           .eq('tenant_id', a.tenantId)
           .eq('revision', body.revision)
@@ -371,7 +372,7 @@ async function handle(request: Request, { params }: { params: Promise<{ path: st
           approver_name: a.membership!.display_name,
           approver_registration: a.membership!.professional_registration,
         };
-        const pdf = await generatePdf(final, true),
+        const pdf = await generateServerPdf(final, true),
           hash = createHash('sha256').update(pdf).digest('hex');
         const storagePath = `${a.tenantId}/${id}/reports/${randomUUID()}.pdf`;
         const { error: uploadError } = await a.db.storage
@@ -407,7 +408,7 @@ async function handle(request: Request, { params }: { params: Promise<{ path: st
           bytes = Buffer.from(await data!.arrayBuffer());
           if (createHash('sha256').update(bytes).digest('hex') !== c.pdf_sha256)
             throw new ApiError(502, 'Falha na verificação de integridade do PDF.');
-        } else bytes = await generatePdf(c, false);
+        } else bytes = await generateServerPdf(c, false);
         return new Response(new Uint8Array(bytes), {
           headers: {
             ...noStore,
@@ -461,6 +462,7 @@ async function handle(request: Request, { params }: { params: Promise<{ path: st
         422,
       );
     if (error instanceof ApiError) return json({ error: error.message }, error.status);
+    if (error instanceof PdfContentError) return json({ error: error.message }, 422);
     if (error instanceof SyntaxError) return json({ error: 'Corpo JSON inválido.' }, 400);
     if (error instanceof Error && error.name === 'TimeoutError')
       return json({ error: 'O provedor demorou para responder. O caso foi preservado.' }, 504);

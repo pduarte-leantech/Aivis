@@ -1,6 +1,7 @@
 import type { NextConfig } from 'next';
 const config: NextConfig = {
   poweredByHeader: false,
+  outputFileTracingIncludes: { '/api/v1/**': ['./public/fonts/*.ttf'] },
   serverExternalPackages: ['unpdf'],
   async headers() {
     return [

@@ -1,17 +1,33 @@
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, rgb } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
+import type { PdfFonts } from './pdf-fonts';
 import type { ClinicalCase, Report } from './types';
 import { reportLabels } from './types';
 const safe = (v: string) =>
   v
     .normalize('NFC')
-    .replace(/[\u2010-\u2015]/g, '-')
-    .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u201c\u201d]/g, '"')
-    .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, ' ');
-export async function generatePdf(c: ClinicalCase, approved = false, demonstration = false) {
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+export class PdfContentError extends Error {
+  constructor() {
+    super(
+      'O conteúdo inclui um caractere sem suporte na fonte do PDF. Revise os símbolos antes de exportar.',
+    );
+    this.name = 'PdfContentError';
+  }
+}
+export async function generatePdf(
+  c: ClinicalCase,
+  approved: boolean,
+  demonstration: boolean,
+  fonts: PdfFonts,
+) {
   const doc = await PDFDocument.create();
-  const regular = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  doc.registerFontkit(fontkit);
+  const regular = await doc.embedFont(fonts.regular, { subset: true });
+  const bold = await doc.embedFont(fonts.bold, { subset: true });
+  const regularChars = new Set(regular.getCharacterSet()),
+    boldChars = new Set(bold.getCharacterSet());
   const w = 595.28,
     h = 841.89,
     margin = 48,
@@ -24,7 +40,13 @@ export async function generatePdf(c: ClinicalCase, approved = false, demonstrati
   }
   function line(t: string, size = 10, strong = false, color = rgb(0.16, 0.22, 0.25)) {
     const font = strong ? bold : regular;
-    const paragraphs = safe(t).split('\n');
+    const clean = safe(t);
+    const supported = strong ? boldChars : regularChars;
+    for (const ch of clean) {
+      if (ch !== '\n' && ch !== '\t' && !supported.has(ch.codePointAt(0)!))
+        throw new PdfContentError();
+    }
+    const paragraphs = clean.split('\n');
     for (const paragraph of paragraphs) {
       let row = '';
       for (const rawWord of paragraph.split(/\s+/)) {

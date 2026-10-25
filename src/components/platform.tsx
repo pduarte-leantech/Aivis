@@ -945,12 +945,20 @@ export default function Platform({ configured }: { configured: boolean }) {
           configured={configured}
           onClose={() => setShowLogin(false)}
           onSuccess={() => {
+            loadSequence.current++;
+            setCases([]);
+            setStats(null);
+            setSelected(null);
+            setLoading(true);
             setShowLogin(false);
             setDemo(false);
             setOffset(0);
             void load();
           }}
           onDemo={() => {
+            loadSequence.current++;
+            setStats(null);
+            setSelected(null);
             setDemo(true);
             setCases(getDemoCases());
             setShowLogin(false);

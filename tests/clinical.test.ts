@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { caseSchema, reportSchema, isFileSignature, uploadSchema } from '../src/lib/validation';
 import { generatePdf } from '../src/lib/pdf';
+import { readFile } from 'node:fs/promises';
+const fonts = {
+  regular: await readFile('public/fonts/DejaVuSans.ttf'),
+  bold: await readFile('public/fonts/DejaVuSans-Bold.ttf'),
+};
 import { getDemoCases, demoReport } from '../src/lib/demo';
 import { getDocumentProxy, extractText } from 'unpdf';
 import {
@@ -109,7 +114,7 @@ describe('PDF integrity and content', () => {
         findings: 'Evidência fictícia e hipóteses que exigem revisão. '.repeat(100),
       },
     };
-    const bytes = await generatePdf(c, false, true);
+    const bytes = await generatePdf(c, false, true, fonts);
     expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe('%PDF-');
     const pdf = await getDocumentProxy(bytes);
     try {
@@ -124,7 +129,7 @@ describe('PDF integrity and content', () => {
   });
   it('includes approver identity and version on approved reports', async () => {
     const c = getDemoCases()[1];
-    const pdf = await getDocumentProxy(await generatePdf(c, true, true));
+    const pdf = await getDocumentProxy(await generatePdf(c, true, true, fonts));
     try {
       const { text } = await extractText(pdf, { mergePages: true });
       expect(text).toContain('Médico demonstrativo');
@@ -193,4 +198,21 @@ describe('AI execution safety', () => {
     expect(result).not.toHaveProperty('approved_at');
     expect(result).not.toHaveProperty('status');
   });
+});
+
+it('preserves clinical inequality signs, Greek symbols and units without silent substitution', async () => {
+  const c = getDemoCases()[0];
+  c.report = { ...demoReport, findings: 'PCR ≥ 10 mg/L; TSH ≤ 0,1; β-hCG; 10 µg; ↑ ↓.' };
+  const pdf = await getDocumentProxy(await generatePdf(c, false, true, fonts));
+  try {
+    const { text } = await extractText(pdf, { mergePages: true });
+    expect(text).toContain('PCR ≥ 10 mg/L');
+    expect(text).toContain('TSH ≤ 0,1');
+    expect(text).toContain('β-hCG');
+    // PDF.js normalizes the micro sign to its Unicode-compatible Greek form.
+    expect(text.normalize('NFKC')).toContain('µg'.normalize('NFKC'));
+    expect(text).toContain('↑ ↓');
+  } finally {
+    await pdf.loadingTask.destroy();
+  }
 });

@@ -63,8 +63,16 @@ export default function Review({
           if (!res.ok) throw new Error('Não foi possível carregar o documento final.');
           blob = await res.blob();
         } else {
-          const { generatePdf } = await import('@/lib/pdf');
-          const bytes = await generatePdf({ ...c, report }, c.status === 'approved', demo);
+          const [{ generatePdf }, { browserPdfFonts }] = await Promise.all([
+            import('@/lib/pdf'),
+            import('@/lib/pdf-fonts'),
+          ]);
+          const bytes = await generatePdf(
+            { ...c, report },
+            c.status === 'approved',
+            demo,
+            await browserPdfFonts(),
+          );
           blob = new Blob([new Uint8Array(bytes).buffer], { type: 'application/pdf' });
         }
         if (cancelled) return;
@@ -110,6 +118,7 @@ export default function Review({
           method: action === 'report' ? 'PATCH' : 'POST',
           body: JSON.stringify(body || { revision: c.revision }),
         });
+        if (action === 'report' && data.report) setReport(data.report);
         onChange({ ...c, ...data });
         notify(
           action === 'approve'

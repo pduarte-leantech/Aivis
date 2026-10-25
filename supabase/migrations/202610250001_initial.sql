@@ -1,3 +1,4 @@
+begin;
 -- Run with the Supabase SQL editor or `supabase db push`.
 -- gen_random_uuid() is built into PostgreSQL 13+. No extra extension needed.
 
@@ -13,7 +14,7 @@ create table public.cases (
  id uuid primary key default gen_random_uuid(), tenant_id uuid not null references public.tenants(id),
  patient_name text not null, patient_code text not null, birth_date date, anamnesis text not null,
  status text not null default 'pending' check(status in ('pending','review','approved','rejected')),
- report jsonb, revision integer not null default 1, model text, analysis_started_at timestamptz, analysis_token uuid, analyzed_at timestamptz,
+ report jsonb, last_edited_by uuid references auth.users(id), revision integer not null default 1, model text, analysis_started_at timestamptz, analysis_token uuid, analyzed_at timestamptz,
  approved_at timestamptz, approved_by uuid references auth.users(id), approver_name text, approver_registration text,
  pdf_path text, pdf_sha256 text, created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
  unique(tenant_id,id),
@@ -81,7 +82,7 @@ begin
  if old.status='approved' then raise exception 'Approved reports are immutable'; end if;
  if new.tenant_id<>old.tenant_id or new.id<>old.id then raise exception 'Case identity is immutable'; end if;
  if new.report is distinct from old.report or new.status is distinct from old.status then
-   insert into report_versions(tenant_id,case_id,revision,report,status,actor_id) values(old.tenant_id,old.id,old.revision,old.report,old.status,old.approved_by);
+   insert into report_versions(tenant_id,case_id,revision,report,status,actor_id) values(old.tenant_id,old.id,old.revision,old.report,old.status,old.last_edited_by);
    new.revision=old.revision+1;
  end if;
  new.updated_at=now();
@@ -145,5 +146,7 @@ begin raise exception 'Append-only record'; end $$;
 create trigger audit_append_only before update or delete on public.audit_events for each row execute function public.append_only();
 create trigger versions_append_only before update or delete on public.report_versions for each row execute function public.append_only();
 
-grant all on all tables in schema public to service_role;
-grant usage,select on all sequences in schema public to service_role;
+grant all on public.tenants,public.memberships,public.cases,public.exams,public.api_keys,public.audit_events,public.report_versions,public.rate_limits to service_role;
+grant usage,select on sequence public.audit_events_id_seq,public.report_versions_id_seq to service_role;
+
+commit;

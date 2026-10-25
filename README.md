@@ -1,8 +1,8 @@
 # Aivis
 
-Plataforma de apoio à decisão clínica, com anamnese, exames, análise por Grok, revisão médica, PDF e API multiempresa. Interface em português, sem dependências externas de fontes ou imagens.
+Plataforma de apoio à decisão clínica, com anamnese, exames, análise por Grok, revisão médica, PDF e API multiempresa. Interface em português, com fontes locais licenciadas e sem downloads de fontes ou imagens de terceiros.
 
-**Estado:** aplicação e demonstração local implementadas. Não considerar os serviços reais conectados até completar [DEPLOY.md](docs/DEPLOY.md) e os testes de aceitação. O modo demonstrativo usa exclusivamente dados fictícios em memória; não chama a IA, não envia convites, não mantém histórico persistente e não grava arquivos de pacientes.
+**Estado:** aplicação implementada e demonstração publicada em https://aivis-ten-theta.vercel.app, na conta Vercel do proprietário. Não considerar os serviços reais conectados até completar [DEPLOY.md](docs/DEPLOY.md) e os testes de aceitação. O modo demonstrativo usa exclusivamente dados fictícios em memória; não chama a IA, não envia convites, não mantém histórico persistente e não grava arquivos de pacientes.
 
 ## Testar em cinco minutos
 
