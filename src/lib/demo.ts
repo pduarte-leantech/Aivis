@@ -61,12 +61,15 @@ export function getDemoCases(): ClinicalCase[] {
         id: `exam-${i}-${j}`,
         case_id: `demo-${i}`,
         name:
-          j === 0
-            ? 'Hemograma completo.pdf'
-            : j === 1
-              ? 'Perfil laboratorial.pdf'
-              : 'Exame complementar.png',
-        mime_type: j === 2 ? 'image/png' : 'application/pdf',
+          i === 2 && j === 0
+            ? 'Radiografia_torax.dicom'
+            : j === 0
+              ? 'Hemograma completo.pdf'
+              : j === 1
+                ? 'Perfil laboratorial.pdf'
+                : 'Exame complementar.png',
+        mime_type:
+          i === 2 && j === 0 ? 'application/dicom' : j === 2 ? 'image/png' : 'application/pdf',
         size: 124000 + j * 85000,
         storage_path: '',
         created_at: date.toISOString(),

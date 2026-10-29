@@ -4,8 +4,8 @@
 
 A conta do proprietário precisa autorizar a criação. Se o projeto ainda não existir, crie em sua organização com região **South America / São Paulo (`sa-east-1`)**. Não selecione uma região diferente como fallback silencioso.
 
-1. Em SQL Editor, execute o arquivo completo `supabase/migrations/202610250001_initial.sql` **uma vez**. Alternativa: `supabase link --project-ref SEU_REF` e `supabase db push` com autenticação segura.
-2. Confirme que o bucket `clinical-files` é privado, com limite de 4 MB. Não adicione políticas públicas de Storage.
+1. Em SQL Editor, execute as migrações em `supabase/migrations/` **uma vez, na ordem dos nomes**. Para projetos que já receberam a migração inicial, aplique somente `202610290001_dicom.sql`. Alternativa: `supabase link --project-ref SEU_REF` e `supabase db push` com autenticação segura.
+2. Confirme que o bucket `clinical-files` é privado, com limite de 50 MB e MIME `application/dicom`, mantendo o bucket privado. Não adicione políticas públicas de Storage.
 3. Em Authentication, desative cadastro público. Configure Site URL com o domínio final da Vercel e a URL de redirecionamento `/auth/callback`.
 4. Configure SMTP de produção, proteção contra senhas comprometidas e limites de autenticação. Não dependa do serviço de e-mail de desenvolvimento para clientes.
 5. Para aceitar convites com SSR, configure o template **Invite user** com o link:
@@ -80,9 +80,17 @@ A Vercel identificou o plano atual como Hobby. Confira os termos e escolha um pl
 O token de gerenciamento Supabase é diferente das chaves do projeto e só é necessário para automatizar o provisionamento. Não o cole na conversa, em arquivos versionados nem no front-end. O requisito salvo chama-se `SUPABASE_ACCESS_TOKEN`, com destino `api.supabase.com`. Se a interface de configurações deste ambiente não disponibilizar um campo seguro para esse requisito, use o caminho manual, sem fornecer o token ao agente:
 
 1. Acesse `https://supabase.com/dashboard/new` com sua conta. Crie o projeto Aivis, região São Paulo, e guarde a senha do banco em um gerenciador.
-2. Execute a migração no SQL Editor do projeto e configure o usuário inicial como descrito acima.
+2. Execute as migrações em ordem no SQL Editor do projeto e configure o usuário inicial como descrito acima.
 3. Abra o projeto Aivis na sua conta Vercel: Settings > Environment Variables. Cadastre a URL, anon key e service_role do Supabase. O access token da conta Supabase não é necessário nessa configuração.
 4. Mantenha `AI_PROCESSING_ENABLED=false`. A chave xAI pode ser adicionada depois, sem alterar código.
 5. Defina `APP_URL` com o domínio de produção, refaça o deploy e execute os testes de aceitação.
 
 A URL pública do projeto e seu identificador não são segredos. Chaves service_role, senha do banco, access token e chave xAI são segredos e devem permanecer nos campos seguros dos respectivos serviços. Salvar uma credencial em outro projeto ou painel não a injeta automaticamente neste ambiente.
+
+## Operação de uploads DICOM
+
+O upload principal tem três etapas: autorização de um caminho privado, PUT diretamente ao Supabase e confirmação no servidor. A reserva expira em 15 minutos; a capacidade de upload do Supabase tem validade de duas horas. Uma reserva expirada nunca é confirmada, e o original confirmado não pode ser substituído pela URL de upload. O controle de quota e o bloqueio contra análise durante envios são transacionais.
+
+Agende `npm run uploads:cleanup` com as variáveis Supabase do ambiente de produção, por exemplo a cada hora. O comando processa até 100 reservas abandonadas com mais de três horas, respeitando a validade do token e sem remover exames confirmados. Não publique URLs assinadas em logs. Confira também o limite por objeto configurado no projeto Supabase (50 MB ou mais) e as políticas CORS do Storage.
+
+O build traça as dependências do worker e inclui as pipelines WASM locais. `npm run verify:dicom-runtime` copia somente os arquivos do artefato Next/Vercel para uma pasta isolada e extrai dois frames sintéticos; execute antes do deploy. Os codecs não são baixados de CDNs durante o processamento.

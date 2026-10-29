@@ -14,6 +14,7 @@ beforeAll(async () => {
   );
   const migration = await readFile('supabase/migrations/202610250001_initial.sql', 'utf8');
   await db.exec(migration);
+  await db.exec(await readFile('supabase/migrations/202610290001_dicom.sql', 'utf8'));
   await db.query('insert into auth.users values($1),($2)', [u1, u2]);
   await db.query('insert into tenants(id,name) values($1,$2),($3,$4)', [
     t1,
@@ -151,8 +152,120 @@ describe('PostgreSQL migration and tenant security', () => {
     );
     expect(other.rows[0].stats.totals.cases).toBe(0);
   });
-  it('keeps the storage bucket private with a platform-compatible 4 MB limit', async () => {
+  it('keeps the storage bucket private with a private 50 MB DICOM limit', async () => {
     const { rows } = await db.query('select public,file_size_limit from storage.buckets');
-    expect(rows).toEqual([{ public: false, file_size_limit: 4194304 }]);
+    expect(rows).toEqual([{ public: false, file_size_limit: 52428800 }]);
+  });
+});
+
+describe('Private signed DICOM upload lifecycle', () => {
+  async function newCase() {
+    const { rows } = await db.query<{ id: string }>(
+      "insert into cases(tenant_id,patient_name,patient_code,anamnesis) values($1,'Fictício','DICOM','Histórico sintético') returning id",
+      [t1],
+    );
+    return rows[0].id;
+  }
+  async function reserve(c: string, size = 100, mime = 'application/dicom') {
+    const { rows } = await db.query<{ u: { id: string; storage_path: string } }>(
+      "select to_jsonb(reserve_exam_upload($1,$2,'synthetic.dicom',$3,$4)) as u",
+      [t1, c, mime, size],
+    );
+    return rows[0].u;
+  }
+  it('keeps reservations private and denies direct authenticated access', async () => {
+    await db.exec('set role authenticated');
+    try {
+      await expect(db.query('select * from exam_uploads')).rejects.toThrow('permission denied');
+      await expect(
+        db.query("select reserve_exam_upload($1,$2,'x','application/dicom',10)", [t1, c1]),
+      ).rejects.toThrow('permission denied');
+    } finally {
+      await db.exec('reset role');
+    }
+  });
+  it('blocks analysis until a reserved upload is confirmed and confirms idempotently', async () => {
+    const c = await newCase(),
+      u = await reserve(c, 40 * 1024 * 1024);
+    expect(u.storage_path).toContain(`${t1}/${c}/exams/`);
+    let r = await db.query<{ allowed: boolean }>(
+      'select start_case_analysis($1,$2,gen_random_uuid()) as allowed',
+      [t1, c],
+    );
+    expect(r.rows[0].allowed).toBe(false);
+    await expect(
+      db.query('select finish_exam_upload($1,$2,$3,null)', [t2, c, u.id]),
+    ).rejects.toThrow('Upload not found');
+    for (let i = 0; i < 2; i++)
+      await db.query('select finish_exam_upload($1,$2,$3,$4)', [
+        t1,
+        c,
+        u.id,
+        JSON.stringify({ format: 'DICOM', frames: 2 }),
+      ]);
+    const exams = await db.query<{ metadata: { frames: number } }>(
+      'select metadata from exams where case_id=$1',
+      [c],
+    );
+    expect(exams.rows).toHaveLength(1);
+    expect(exams.rows[0].metadata.frames).toBe(2);
+    r = await db.query<{ allowed: boolean }>(
+      'select start_case_analysis($1,$2,gen_random_uuid()) as allowed',
+      [t1, c],
+    );
+    expect(r.rows[0].allowed).toBe(true);
+    await expect(reserve(c)).rejects.toThrow('not accepting');
+  });
+  it('cannot cancel a confirmed upload or a different tenant reservation', async () => {
+    const c = await newCase(),
+      u = await reserve(c);
+    const wrong = await db.query<{ path: string | null }>(
+      'select cancel_exam_upload($1,$2,$3) as path',
+      [t2, c, u.id],
+    );
+    expect(wrong.rows[0].path).toBeNull();
+    await db.query('select finish_exam_upload($1,$2,$3,null)', [t1, c, u.id]);
+    const result = await db.query<{ path: string | null }>(
+      'select cancel_exam_upload($1,$2,$3) as path',
+      [t1, c, u.id],
+    );
+    expect(result.rows[0].path).toBeNull();
+    const { rows } = await db.query('select id from exams where id=$1', [u.id]);
+    expect(rows).toHaveLength(1);
+  });
+  it('enforces the shared byte quota across pending reservations and legacy uploads', async () => {
+    const c = await newCase();
+    for (let i = 0; i < 5; i++) await reserve(c, 50 * 1024 * 1024);
+    await expect(reserve(c, 50 * 1024 * 1024)).rejects.toThrow('quota');
+    await expect(
+      db.query(
+        "insert into exams(tenant_id,case_id,name,mime_type,size,storage_path) values($1,$2,'too-large','application/dicom',10000000,'quota-file')",
+        [t1, c],
+      ),
+    ).rejects.toThrow('quota');
+  });
+  it('does not finalize an expired or canceled upload', async () => {
+    const c = await newCase(),
+      u = await reserve(c);
+    await db.query("update exam_uploads set expires_at=now()-interval '1 minute' where id=$1", [
+      u.id,
+    ]);
+    await expect(
+      db.query('select finish_exam_upload($1,$2,$3,null)', [t1, c, u.id]),
+    ).rejects.toThrow('expired');
+    const fresh = await reserve(c);
+    const result = await db.query<{ path: string }>('select cancel_exam_upload($1,$2,$3) as path', [
+      t1,
+      c,
+      fresh.id,
+    ]);
+    expect(result.rows[0].path).toBe(fresh.storage_path);
+    await expect(
+      db.query('select finish_exam_upload($1,$2,$3,null)', [t1, c, fresh.id]),
+    ).rejects.toThrow('expired');
+  });
+  it('retains the 4 MB limit for non-DICOM files', async () => {
+    const c = await newCase();
+    await expect(reserve(c, 5 * 1024 * 1024, 'image/png')).rejects.toThrow('check constraint');
   });
 });

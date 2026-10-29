@@ -9,12 +9,20 @@ import {
   requirePhysician,
   type Access,
 } from '@/lib/auth';
-import { caseSchema, reportSchema, uploadSchema, isFileSignature } from '@/lib/validation';
+import { caseSchema, reportSchema, uploadSchema } from '@/lib/validation';
 import { boundedBody, readJson } from '@/lib/body';
 import { generateServerPdf } from '@/lib/pdf-server';
 import { PdfContentError } from '@/lib/pdf';
 import { analyzeWithGrok } from '@/lib/grok';
 import type { ClinicalCase } from '@/lib/types';
+import { processDicom } from '@/lib/dicom';
+import { DICOM_MIME, normalizeExamMime, MAX_EXAMS } from '@/lib/upload-policy';
+import {
+  reserveExamUpload,
+  finishExamUpload,
+  cancelExamUpload,
+  validateExamContent,
+} from '@/lib/exam-uploads';
 import { exposeCase } from '@/lib/serialization';
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -173,7 +181,7 @@ async function handle(request: Request, { params }: { params: Promise<{ path: st
           .parse(url.searchParams.get('offset') || 0);
         let query = a.db
           .from('cases')
-          .select('*,exams(id,name,mime_type,size,created_at)', { count: 'exact' })
+          .select('*,exams(id,name,mime_type,size,created_at,metadata)', { count: 'exact' })
           .eq('tenant_id', a.tenantId)
           .order('created_at', { ascending: false })
           .range(offset, offset + 49);
@@ -211,10 +219,73 @@ async function handle(request: Request, { params }: { params: Promise<{ path: st
         await audit(a, 'case.viewed', id);
         return json(exposeCase(c, !!a.apiKeyId));
       }
+      if (action === 'uploads') {
+        if (request.method === 'POST') {
+          const input = await readJson(request);
+          if (
+            typeof input === 'object' &&
+            input !== null &&
+            'name' in input &&
+            'mime_type' in input
+          )
+            input.mime_type = normalizeExamMime(String(input.name), String(input.mime_type));
+          return json(await reserveExamUpload(a, id, input), 201);
+        }
+        const body = z
+          .object({ upload_id: z.uuid() })
+          .strict()
+          .parse(await readJson(request));
+        if (request.method === 'PATCH')
+          return json(await finishExamUpload(a, id, body.upload_id), 200);
+        if (request.method === 'DELETE') {
+          await cancelExamUpload(a, id, body.upload_id);
+          return json({ cancelled: true });
+        }
+      }
+      if (action === 'dicom' && request.method === 'GET') {
+        const { data: allowed, error: rateError } = await a.db.rpc('consume_rate_limit', {
+          p_key: `dicom:${a.tenantId}`,
+          p_limit: 120,
+          p_window: 60,
+        });
+        dbError(rateError);
+        if (!allowed)
+          throw new ApiError(429, 'Limite de visualizações DICOM atingido. Aguarde um minuto.');
+        const url = new URL(request.url);
+        const examId = z.uuid().parse(url.searchParams.get('exam_id'));
+        const frame = z.coerce
+            .number()
+            .int()
+            .min(0)
+            .max(63)
+            .parse(url.searchParams.get('frame') || 0),
+          window = z.coerce
+            .number()
+            .int()
+            .min(0)
+            .max(2)
+            .parse(url.searchParams.get('window') || 0);
+        const exam = c.exams?.find((e) => e.id === examId && e.mime_type === DICOM_MIME);
+        if (!exam) throw new ApiError(404, 'DICOM não encontrado neste caso.');
+        await audit(a, 'exam.dicom_frame_viewed', id, { exam_id: examId, frame, window });
+        const { data, error } = await a.db.storage
+          .from('clinical-files')
+          .download(exam.storage_path);
+        dbError(error);
+        if (!data) throw new ApiError(503, 'Não foi possível ler o DICOM.');
+        const rendered = await processDicom(new Uint8Array(await data.arrayBuffer()), {
+          frame,
+          window,
+        });
+        return new Response(new Uint8Array(rendered.images[0].png), {
+          headers: { ...noStore, 'Content-Type': 'image/png', 'X-Content-Type-Options': 'nosniff' },
+        });
+      }
       if (action === 'upload' && request.method === 'POST') {
         if (c.status !== 'pending' || ('analysis_started_at' in c && c.analysis_started_at))
           throw new ApiError(409, 'Exames só podem ser adicionados antes da análise.');
-        if ((c.exams?.length || 0) >= 8) throw new ApiError(422, 'Limite de oito exames por caso.');
+        if ((c.exams?.length || 0) >= MAX_EXAMS)
+          throw new ApiError(422, 'Limite de 64 exames por caso.');
         const length = Number(request.headers.get('content-length') || 0);
         if (length > 4.4 * 1024 * 1024) throw new ApiError(413, 'Arquivo muito grande.');
         const uploadBytes = await boundedBody(request, Math.floor(4.4 * 1024 * 1024));
@@ -223,10 +294,13 @@ async function handle(request: Request, { params }: { params: Promise<{ path: st
         }).formData();
         const file = form.get('file');
         if (!(file instanceof File)) throw new ApiError(400, 'Envie um arquivo no campo file.');
-        const body = uploadSchema.parse({ name: file.name, mime_type: file.type, size: file.size });
+        const body = uploadSchema.parse({
+          name: file.name,
+          mime_type: normalizeExamMime(file.name, file.type),
+          size: file.size,
+        });
         const bytes = new Uint8Array(await file.arrayBuffer());
-        if (!isFileSignature(bytes, body.mime_type))
-          throw new ApiError(422, 'Conteúdo do arquivo incompatível com o formato.');
+        const metadata = await validateExamContent(bytes, body.mime_type);
         const examId = randomUUID(),
           storagePath = `${a.tenantId}/${id}/exams/${examId}`;
         await audit(a, 'exam.upload_requested', id, { exam_id: examId });
@@ -240,12 +314,13 @@ async function handle(request: Request, { params }: { params: Promise<{ path: st
           tenant_id: a.tenantId,
           case_id: id,
           storage_path: storagePath,
+          metadata,
         });
         if (insertError) {
           await a.db.storage.from('clinical-files').remove([storagePath]);
           dbError(insertError);
         }
-        return json({ id: examId, ...body }, 201);
+        return json({ id: examId, ...body, metadata }, 201);
       }
       if (action === 'analyze' && request.method === 'POST') {
         z.object({ consent: z.literal(true) })
@@ -262,18 +337,17 @@ async function handle(request: Request, { params }: { params: Promise<{ path: st
         if (!budget)
           throw new ApiError(429, 'Limite de 20 análises por hora atingido para este cliente.');
         const analysisToken = randomUUID();
-        const stale = new Date(Date.now() - 180000).toISOString();
-        const { data: locked, error: lockError } = await a.db
-          .from('cases')
-          .update({ analysis_started_at: new Date().toISOString(), analysis_token: analysisToken })
-          .eq('id', id)
-          .eq('tenant_id', a.tenantId)
-          .eq('status', 'pending')
-          .or(`analysis_started_at.is.null,analysis_started_at.lt.${stale}`)
-          .select('id')
-          .maybeSingle();
+        const { data: locked, error: lockError } = await a.db.rpc('start_case_analysis', {
+          p_tenant: a.tenantId,
+          p_case: id,
+          p_token: analysisToken,
+        });
         dbError(lockError);
-        if (!locked) throw new ApiError(409, 'Já existe uma análise em andamento.');
+        if (!locked)
+          throw new ApiError(
+            409,
+            'Aguarde os envios ou a análise em andamento antes de analisar este caso.',
+          );
         try {
           await audit(a, 'analysis.started', id);
           const lockedCase = await getCase(a, id);
@@ -297,7 +371,12 @@ async function handle(request: Request, { params }: { params: Promise<{ path: st
             .maybeSingle();
           dbError(error);
           if (!data) throw new ApiError(409, 'O caso foi alterado durante a análise.');
-          await audit(a, 'analysis.completed', id, { model: result.model, usage: result.usage });
+          await audit(a, 'analysis.completed', id, {
+            model: result.model,
+            usage: result.usage,
+            dicom: result.dicomExtractions,
+            image_count: result.imageCount,
+          });
           return json(exposeCase(data, !!a.apiKeyId));
         } finally {
           await a.db
@@ -436,6 +515,19 @@ async function handle(request: Request, { params }: { params: Promise<{ path: st
         const exam = c.exams?.find((e) => e.id === examId);
         if (!exam) throw new ApiError(404, 'Exame não encontrado.');
         await audit(a, 'exam.viewed', id, { exam_id: exam.id });
+        if (exam.mime_type === DICOM_MIME) {
+          const { data: signed, error } = await a.db.storage
+            .from('clinical-files')
+            .createSignedUrl(exam.storage_path, 60, { download: exam.name });
+          dbError(error);
+          if (!signed) throw new ApiError(503, 'Não foi possível autorizar o download.');
+          if (new URL(request.url).searchParams.get('download_url') === 'true')
+            return json({ url: signed.signedUrl, expires_in: 60 });
+          return new Response(null, {
+            status: 307,
+            headers: { ...noStore, Location: signed.signedUrl },
+          });
+        }
         const { data, error } = await a.db.storage
           .from('clinical-files')
           .download(exam.storage_path);

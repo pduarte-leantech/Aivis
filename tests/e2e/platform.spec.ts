@@ -128,3 +128,28 @@ test('unauthenticated real APIs fail closed and security headers are applied', a
   });
   expect(origin.status()).toBe(403);
 });
+
+test('DICOM is the primary upload format and has a dedicated image preview', async ({ page }) => {
+  await page.goto('/');
+  await nav(page, 'Casos clínicos');
+  await page.getByRole('button', { name: 'Abrir caso DEMO-1046' }).click();
+  const input = page.getByLabel('Enviar exames');
+  await expect(input).toHaveAttribute('accept', /\.dicom.*\.dcm.*application\/dicom/);
+  await page.getByRole('button', { name: 'Visualizar DICOM Radiografia_torax.dicom' }).click();
+  await expect(
+    page.getByRole('dialog', { name: 'Imagens DICOM · Radiografia_torax.dicom' }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Na demonstração, somente o nome do arquivo é listado.', { exact: false }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Fechar janela' }).click();
+  await input.setInputFiles({
+    name: 'segundo_exame.DICOM',
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.concat([Buffer.alloc(128), Buffer.from('DICM')]),
+  });
+  await expect(
+    page.getByRole('button', { name: 'Visualizar DICOM segundo_exame.DICOM' }),
+  ).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('conteúdo não enviado');
+});

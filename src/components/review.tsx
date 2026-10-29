@@ -14,11 +14,22 @@ import {
   Upload,
   XCircle,
 } from 'lucide-react';
-import type { ClinicalCase, Report } from '@/lib/types';
+import type { ClinicalCase, Report, Exam } from '@/lib/types';
 import { reportLabels } from '@/lib/types';
 import { demoReport } from '@/lib/demo';
 import type { FlexibleApi } from '@/lib/api-types';
 import { Modal, Status, date } from './clinical-ui';
+import DicomViewer from './dicom-viewer';
+import {
+  DICOM_MIME,
+  ACCEPTED_EXAMS,
+  normalizeExamMime,
+  maxExamBytes,
+  MAX_EXAMS,
+  MAX_CASE_BYTES,
+} from '@/lib/upload-policy';
+import { Images, ScanLine } from 'lucide-react';
+
 export default function Review({
   c,
   demo,
@@ -48,6 +59,7 @@ export default function Review({
     [view, setView] = useState<'edit' | 'pdf'>('edit');
   const dirty = JSON.stringify(report) !== JSON.stringify(c.report);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [dicomExam, setDicomExam] = useState<Exam | null>(null);
   useEffect(() => {
     if (!c.report) return;
     let cancelled = false,
@@ -145,24 +157,60 @@ export default function Review({
     try {
       const exams = [...(c.exams || [])];
       for (const file of Array.from(files)) {
-        if (file.size > 4 * 1024 * 1024) throw new Error('Cada arquivo deve ter no máximo 4 MB.');
-        if (!['application/pdf', 'image/png', 'image/jpeg', 'image/webp'].includes(file.type))
-          throw new Error('Envie PDF, PNG, JPEG ou WebP.');
-        if (exams.length >= 8) throw new Error('Limite de 8 arquivos por caso.');
+        const mime = normalizeExamMime(file.name, file.type);
+        if (file.size > maxExamBytes(mime))
+          throw new Error(
+            mime === DICOM_MIME
+              ? 'DICOM deve ter até 50 MB.'
+              : 'PDFs e imagens devem ter até 4 MB.',
+          );
+        if (
+          ![DICOM_MIME, 'application/pdf', 'image/png', 'image/jpeg', 'image/webp'].includes(mime)
+        )
+          throw new Error('Envie DICOM (.dicom/.dcm), PDF, PNG, JPEG ou WebP.');
+        if (
+          exams.length >= MAX_EXAMS ||
+          exams.reduce((n, e) => n + e.size, 0) + file.size > MAX_CASE_BYTES
+        )
+          throw new Error('Limite de 64 arquivos e 256 MB por caso.');
         if (demo)
           exams.push({
             id: crypto.randomUUID(),
             case_id: c.id,
             name: file.name,
-            mime_type: file.type,
+            mime_type: mime,
             size: file.size,
             storage_path: '',
             created_at: new Date().toISOString(),
           });
         else {
-          const form = new FormData();
-          form.set('file', file);
-          const data = await api(`cases/${c.id}/upload`, { method: 'POST', body: form });
+          const authorized = await api(`cases/${c.id}/uploads`, {
+            method: 'POST',
+            body: JSON.stringify({ name: file.name, mime_type: mime, size: file.size }),
+          });
+          let data;
+          try {
+            const sent = await fetch(authorized.signed_url, {
+              method: 'PUT',
+              headers: { 'Content-Type': mime, 'x-upsert': 'false' },
+              body: file,
+            });
+            if (!sent.ok)
+              throw new Error(
+                'O armazenamento recusou o arquivo. Verifique a conexão e tente novamente.',
+              );
+            data = await api(`cases/${c.id}/uploads`, {
+              method: 'PATCH',
+              body: JSON.stringify({ upload_id: authorized.upload_id }),
+            });
+          } catch (e) {
+            await api(`cases/${c.id}/uploads`, {
+              method: 'DELETE',
+              body: JSON.stringify({ upload_id: authorized.upload_id }),
+            }).catch(() => {});
+            throw e;
+          }
+
           exams.push({
             ...data,
             case_id: c.id,
@@ -190,6 +238,15 @@ export default function Review({
       return;
     }
     try {
+      const exam = c.exams?.find((e) => e.id === examId);
+      if (exam?.mime_type === DICOM_MIME) {
+        const data = await api(`cases/${c.id}/exams?exam_id=${examId}&download_url=true`);
+        const anchor = document.createElement('a');
+        anchor.href = data.url;
+        anchor.download = exam.name;
+        anchor.click();
+        return;
+      }
       const res = await fetch(`/api/v1/cases/${c.id}/exams?exam_id=${examId}`, {
         headers: { 'x-tenant-id': c.tenant_id },
       });
@@ -207,8 +264,18 @@ export default function Review({
   }
   return (
     <div className="review-page">
+      {dicomExam && (
+        <DicomViewer
+          exam={dicomExam}
+          caseId={c.id}
+          tenantId={c.tenant_id}
+          demo={demo}
+          onClose={() => setDicomExam(null)}
+        />
+      )}
       <button
         className="back-button"
+        disabled={!!busy}
         onClick={() => {
           if (
             dirty &&
@@ -238,6 +305,12 @@ export default function Review({
           {error}
         </div>
       )}
+      {busy === 'upload' && (
+        <div className="loading" role="status">
+          <Loader2 className="spin" size={18} />
+          Enviando e validando os exames. Mantenha esta página aberta até concluir.
+        </div>
+      )}
       <div className="case-context">
         <section className="panel">
           <div className="panel-heading">
@@ -265,18 +338,29 @@ export default function Review({
           {c.exams?.length ? (
             <div className="exam-list">
               {c.exams.map((e) => (
-                <button key={e.id} onClick={() => void viewExam(e.id)}>
-                  <span className="file-icon">
-                    <FileText size={18} />
-                  </span>
-                  <span>
-                    <strong>{e.name}</strong>
-                    <small>
-                      {(e.size / 1024).toFixed(0)} KB · {e.mime_type.split('/')[1].toUpperCase()}
-                    </small>
-                  </span>
-                  <ArrowDownToLine size={15} />
-                </button>
+                <div className="exam-file" key={e.id}>
+                  <button onClick={() => void viewExam(e.id)} aria-label={`Baixar exame ${e.name}`}>
+                    <span className="file-icon">
+                      {e.mime_type === DICOM_MIME ? <ScanLine size={18} /> : <FileText size={18} />}
+                    </span>
+                    <span>
+                      <strong>{e.name}</strong>
+                      <small>
+                        {(e.size / 1024).toFixed(0)} KB · {e.mime_type.split('/')[1].toUpperCase()}
+                      </small>
+                    </span>
+                    <ArrowDownToLine size={15} />
+                  </button>
+                  {e.mime_type === DICOM_MIME && (
+                    <button
+                      className="icon-btn"
+                      aria-label={`Visualizar DICOM ${e.name}`}
+                      onClick={() => setDicomExam(e)}
+                    >
+                      <Images size={19} />
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           ) : (
@@ -287,7 +371,7 @@ export default function Review({
             >
               <Upload size={24} />
               <strong>Adicione os exames</strong>
-              <span>PDF com texto ou imagens · Até 4 MB por arquivo</span>
+              <span>DICOM (.dicom/.dcm) até 50 MB · PDF e imagens até 4 MB</span>
             </button>
           )}
           <input
@@ -296,7 +380,7 @@ export default function Review({
             multiple
             hidden
             aria-label="Enviar exames"
-            accept="application/pdf,image/png,image/jpeg,image/webp"
+            accept={ACCEPTED_EXAMS}
             onChange={(e) => void upload(e.target.files)}
           />
         </section>
@@ -314,8 +398,9 @@ export default function Review({
           <div className="inline-notice">
             <FileText size={18} />
             <span>
-              PDFs: somente texto extraível será analisado. Imagens dentro do PDF precisam ser
-              enviadas separadamente.
+              DICOM: todas as imagens/frames e janelas são extraídos, respeitando os limites de
+              processamento. PDFs: somente texto extraível será analisado. Imagens dentro do PDF
+              precisam ser enviadas separadamente.
             </span>
           </div>
           <label className="checkbox-label">

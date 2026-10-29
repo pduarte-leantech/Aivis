@@ -34,6 +34,7 @@ export type Exam = {
   mime_type: string;
   size: number;
   storage_path: string;
+  metadata?: import('./dicom').DicomMetadata | null;
   created_at: string;
 };
 export type Membership = {

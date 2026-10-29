@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DICOM_MIME, maxExamBytes } from './upload-policy';
 export const reportSchema = z
   .object({
     summary: z.string().trim().min(10).max(6000),
@@ -30,15 +31,34 @@ export const caseSchema = z
 export const uploadSchema = z
   .object({
     name: z.string().trim().min(1).max(180),
-    mime_type: z.enum(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']),
+    mime_type: z.enum([
+      'application/dicom',
+      'application/pdf',
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+    ]),
     size: z
       .number()
       .int()
       .positive()
-      .max(4 * 1024 * 1024),
+      .max(50 * 1024 * 1024),
   })
-  .strict();
+  .strict()
+  .superRefine((file, ctx) => {
+    if (file.size > maxExamBytes(file.mime_type))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['size'],
+        message:
+          file.mime_type === DICOM_MIME
+            ? 'DICOM deve ter até 50 MB.'
+            : 'PDFs e imagens devem ter até 4 MB.',
+      });
+  });
 export function isFileSignature(bytes: Uint8Array, mime: string): boolean {
+  if (mime === DICOM_MIME)
+    return bytes.length >= 132 && new TextDecoder().decode(bytes.subarray(128, 132)) === 'DICM';
   if (mime === 'application/pdf') return new TextDecoder().decode(bytes.slice(0, 5)) === '%PDF-';
   if (mime === 'image/png')
     return [137, 80, 78, 71, 13, 10, 26, 10].every((b, i) => bytes[i] === b);

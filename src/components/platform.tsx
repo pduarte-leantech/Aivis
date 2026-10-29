@@ -970,8 +970,9 @@ export default function Platform({ configured }: { configured: boolean }) {
         <Modal title="Da informação à decisão clínica" onClose={() => setShowHelp(false)}>
           <div className="modal-body help-content">
             <p>
-              1. Crie um caso com identificador do paciente e anamnese. Adicione PDF com texto,
-              JPEG, PNG ou WebP (até 4 MB por arquivo, 8 arquivos e 20 MB por caso).
+              1. Crie um caso com identificador do paciente e anamnese. Adicione DICOM (.dicom/.dcm,
+              até 50 MB), PDF com texto, JPEG, PNG ou WebP (até 4 MB). Limite de 64 arquivos e 256
+              MB por caso.
             </p>
             <p>
               2. Solicite a análise pelo Grok. O resultado é um rascunho: hipóteses, achados,

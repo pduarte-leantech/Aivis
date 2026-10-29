@@ -43,25 +43,25 @@ O endpoint de PDF retorna `403` para integrações enquanto o relatório não es
 
 ## Endpoints
 
-| Método   | Caminho                         | Acesso / resultado                                                                 |
-| -------- | ------------------------------- | ---------------------------------------------------------------------------------- |
-| GET      | `/me`                           | Identidade e cliente da chave; vínculos da sessão                                  |
-| GET      | `/cases?offset=0&status=review` | Lista paginada de 50 itens; `cases`, `total`, `offset`, `page_size`                |
-| POST     | `/cases`                        | Criar caso; não aceita `tenant_id` ou `status` fornecidos pelo consumidor          |
-| GET      | `/cases/:id`                    | Caso, relatório, exames e metadados do cliente autorizado                          |
-| POST     | `/cases/:id/upload`             | Multipart `file`; PDF/JPEG/PNG/WebP, até 4 MB, 8 arquivos e 20 MB totais           |
-| POST     | `/cases/:id/analyze`            | `{"consent":true}`; processamento precisa estar habilitado no servidor             |
-| GET      | `/cases/:id/exams?exam_id=UUID` | Download privado do exame original                                                 |
-| GET      | `/cases/:id/history`            | **Sessão**: versões anteriores, para o cliente autorizado                          |
-| GET      | `/cases/:id/pdf`                | PDF final para integrações; sessão pode ver rascunho                               |
-| GET      | `/stats`                        | Totais exatos e 12 meses de indicadores, isolados por cliente                      |
-| PATCH    | `/cases/:id/report`             | **Sessão médica**: `{"revision":N,"report":{...}}`                                 |
-| POST     | `/cases/:id/approve`            | **Sessão médica**: `{"revision":N,"confirmed":true}`                               |
-| POST     | `/cases/:id/reject`             | **Sessão médica**: `{"revision":N,"reason":"Motivo com pelo menos 10 caracteres"}` |
-| GET/POST | `/members`                      | **Sessão administrativa**: consultar/convidar novos profissionais                  |
-| GET/POST | `/keys`                         | **Sessão administrativa**: listar/criar chaves                                     |
-| DELETE   | `/keys/:id`                     | **Sessão administrativa**: revogar chave                                           |
-| GET      | `/audit`                        | **Sessão administrativa**: até 100 eventos recentes                                |
+| Método   | Caminho                         | Acesso / resultado                                                                            |
+| -------- | ------------------------------- | --------------------------------------------------------------------------------------------- |
+| GET      | `/me`                           | Identidade e cliente da chave; vínculos da sessão                                             |
+| GET      | `/cases?offset=0&status=review` | Lista paginada de 50 itens; `cases`, `total`, `offset`, `page_size`                           |
+| POST     | `/cases`                        | Criar caso; não aceita `tenant_id` ou `status` fornecidos pelo consumidor                     |
+| GET      | `/cases/:id`                    | Caso, relatório, exames e metadados do cliente autorizado                                     |
+| POST     | `/cases/:id/upload`             | Multipart `file`; DICOM/PDF/JPEG/PNG/WebP até 4 MB (legado); arquivos maiores usam `/uploads` |
+| POST     | `/cases/:id/analyze`            | `{"consent":true}`; processamento precisa estar habilitado no servidor                        |
+| GET      | `/cases/:id/exams?exam_id=UUID` | Download privado; DICOM usa redirecionamento 307 para URL assinada de 60 s                    |
+| GET      | `/cases/:id/history`            | **Sessão**: versões anteriores, para o cliente autorizado                                     |
+| GET      | `/cases/:id/pdf`                | PDF final para integrações; sessão pode ver rascunho                                          |
+| GET      | `/stats`                        | Totais exatos e 12 meses de indicadores, isolados por cliente                                 |
+| PATCH    | `/cases/:id/report`             | **Sessão médica**: `{"revision":N,"report":{...}}`                                            |
+| POST     | `/cases/:id/approve`            | **Sessão médica**: `{"revision":N,"confirmed":true}`                                          |
+| POST     | `/cases/:id/reject`             | **Sessão médica**: `{"revision":N,"reason":"Motivo com pelo menos 10 caracteres"}`            |
+| GET/POST | `/members`                      | **Sessão administrativa**: consultar/convidar novos profissionais                             |
+| GET/POST | `/keys`                         | **Sessão administrativa**: listar/criar chaves                                                |
+| DELETE   | `/keys/:id`                     | **Sessão administrativa**: revogar chave                                                      |
+| GET      | `/audit`                        | **Sessão administrativa**: até 100 eventos recentes                                           |
 
 O relatório contém exatamente cinco campos: `summary`, `findings`, `hypotheses`, `limitations`, `recommendations`. Todos obrigatórios, com no mínimo 10 caracteres. Limites respectivos: 6.000, 12.000, 8.000, 6.000, 8.000 caracteres. Alterações exigem a revisão atual; `409` exige recarregar, nunca sobrescrever silenciosamente.
 
@@ -74,3 +74,18 @@ Sessões multiorganização selecionam `x-tenant-id`; o servidor verifica que o 
 ```
 
 Erros de validação podem incluir `details: [{"field":"anamnesis","message":"..."}]`. Códigos: `400` JSON/ID inválido, `401` sem autenticação/chave inválida, `403` sem permissão, `404` recurso não encontrado no cliente, `409` concorrência/estado incompatível, `413` corpo muito grande, `422` dados/arquivos inválidos, `429` limite, `502` provedor/arquivo incompatível, `503` configuração/serviço indisponível e `504` timeout. Falhas não devem ser interpretadas como aprovação.
+
+## DICOM e upload direto de arquivos grandes
+
+Use esse fluxo para `.dicom`/`.dcm` de até 50 MB e também para os outros formatos. A extensão é normalizada para `application/dicom` quando o navegador não conhece o MIME. Arquivos comuns continuam limitados a 4 MB. A soma de exames e reservas ativas é limitada a 64 arquivos/256 MB por caso.
+
+1. `POST /cases/:id/uploads` com JSON `{"name":"exame.dicom","mime_type":"application/dicom","size":12345678}`. Retorna `201` com `upload_id`, `signed_url`, `expires_at` e `mime_type`. Não registre a URL assinada em logs.
+2. Envie os bytes para `signed_url` com método **PUT**, `Content-Type: application/dicom` e `x-upsert: false`. A URL autoriza somente o caminho reservado; não precisa de service_role no navegador.
+3. `PATCH /cases/:id/uploads` com `{"upload_id":"UUID"}` confirma o upload. O servidor verifica tamanho real, formato, cabeçalho e limites DICOM antes de inserir o exame. A confirmação é idempotente. Um objeto enviado sem confirmação não aparece nos casos nem entra na análise.
+4. Se o envio falhar, `DELETE /cases/:id/uploads` com o mesmo JSON cancela a reserva e remove o objeto temporário. Uma reserva confirmada não pode ser cancelada ou ter seu original removido por esse endpoint.
+
+A reserva expira em 15 minutos. Novas análises são bloqueadas enquanto houver reservas ativas, evitando análise incompleta de arquivos ainda em trânsito. Objetos abandonados precisam da limpeza periódica descrita no guia de implantação.
+
+`GET /cases/:id/dicom?exam_id=UUID&frame=0&window=0` retorna um PNG privado do frame/janela selecionado, com autenticação e isolamento por cliente. Índices começam em zero. Os metadados do exame informam `frames`, `frame_windows`, `transfer_syntax`, dimensões, bits, modalidade, espaçamento e número de imagens extraídas. A prévia não equivale a um visualizador diagnóstico.
+
+Na análise, cada frame/janela suportado vira uma imagem PNG para o Grok. Nenhum DICOM binário é enviado como se fosse JPEG. Limites: 64 frames e 32 milhões de amostras por arquivo, 64 imagens/janelas e 20 MB de imagens renderizadas por análise. Se excedidos, o caso inteiro é recusado antes da chamada ao provedor; não há amostragem silenciosa. O orçamento de tempo da análise é compartilhado entre extração e chamada ao provedor.

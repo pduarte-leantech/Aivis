@@ -40,6 +40,7 @@ npm run lint
 npm test
 npm audit --omit=dev --audit-level=moderate
 npm run build
+npm run verify:dicom-runtime
 npm run test:e2e
 ```
 
@@ -51,7 +52,7 @@ Os testes E2E usam build de produção, Chromium e versões desktop/móvel. Nest
 
 - Clientes com múltiplos profissionais, papéis de administrador, médico e consulta.
 - Isolamento de dados por cliente na autorização do servidor; acesso direto às tabelas clínicas negado a navegadores.
-- Upload privado de PDF com texto, JPEG, PNG e WebP; assinatura do arquivo, quotas e tamanho validados.
+- Upload privado de DICOM (.dicom/.dcm), PDF com texto, JPEG, PNG e WebP; assinatura do arquivo, quotas e tamanho validados.
 - Análise por Grok, saída validada, bloqueio de execução concorrente e limitação de consumo.
 - Edição do conteúdo estruturado com regeneração do PDF, controle de versão e prevenção de sobrescrita concorrente.
 - Aprovação exclusiva de sessão médica com registro profissional; documento aprovado imutável, com hash SHA-256 verificado no download.
@@ -63,11 +64,21 @@ Os testes E2E usam build de produção, Chromium e versões desktop/móvel. Nest
 ## Limites explícitos
 
 - Não é um dispositivo clínico validado e não realiza diagnóstico autônomo. A saída é um rascunho para o médico. A exatidão clínica não é demonstrada pelos testes de software.
-- PDF é um documento gerado a partir do conteúdo editável; não é um editor de PDFs arbitrários importados. PDFs de exames fornecem somente texto. Imagens internas precisam ser enviadas separadamente. DICOM e OCR de PDF digitalizado não estão incluídos.
-- Até 4 MB por arquivo, 8 arquivos e 20 MB por caso; PDFs de até 30 páginas e 60 mil caracteres extraídos. APIs de upload respeitam o limite de payload da Vercel.
+- PDF é um documento gerado a partir do conteúdo editável; não é um editor de PDFs arbitrários importados. PDFs de exames fornecem somente texto. Imagens internas precisam ser enviadas separadamente. DICOM Part 10 é lido com ITK-Wasm/GDCM, dicom-parser e Sharp. DICOM SR/PDF encapsulado/DICOMDIR, vídeos MPEG e OCR de PDF digitalizado não estão incluídos.
+- DICOM até 50 MB; PDF e imagens até 4 MB; 64 arquivos e 256 MB por caso; PDFs de até 30 páginas e 60 mil caracteres extraídos. Arquivos grandes são enviados diretamente ao Storage privado por autorização assinada e validados antes de entrar no caso.
 - Um relatório aprovado não pode ser reaberto. Para retificação, crie um novo caso com referência ao anterior na anamnese. Assinatura digital ICP-Brasil não está implementada.
 - Busca na interface se aplica aos 50 casos da página atual. A API oferece paginação. O painel usa agregações de toda a organização.
 - A região do Supabase não estabelece residência dos dados na xAI ou Vercel. Revisão de contratos, transferência internacional, retenção, consentimento/base legal, backups e requisitos regulatórios são necessários antes de pacientes reais.
 - Ainda não há MFA no aplicativo, processo de exclusão/anonimização, gestão de cobrança ou painel de superadministrador para criar clientes. Um operador provisiona organizações pelo banco. Os limites de consumo são fixos.
 
 [API](docs/API.md) · [Implantação](docs/DEPLOY.md) · [Arquitetura e segurança](docs/SECURITY.md) · [Avaliação e evidências](docs/QUALITY.md)
+
+## DICOM como formato de exame
+
+O fluxo aceita `.dicom` e `.dcm`, inclusive quando o navegador informa MIME vazio ou `application/octet-stream`. O original fica privado no Supabase. Na tela do caso, o ícone de imagens abre a prévia com seleção de frame e janela. A análise extrai **todos** os frames e janelas suportados em PNG e os envia como imagens ao Grok, junto da anamnese. Metadados técnicos e contagem de frames/imagens ficam registrados, sem repassar tags de identificação do paciente ao prompt. Identificadores gravados nos pixels podem continuar presentes.
+
+Limites explícitos: 64 frames e 32 milhões de amostras por arquivo; até três janelas por frame e 64 imagens/janelas no caso inteiro; até 20 MB de PNGs renderizados. A extração é recusada por inteiro se ultrapassar os limites, sem escolher silenciosamente apenas alguns frames. Não é um processador de estudos volumétricos arbitrariamente grandes nem um visualizador diagnóstico. As prévias são PNG de 8 bits e até 1024 px, respeitando espaçamento, rescale, janela e fotometria. O relatório declara essa limitação.
+
+**Banco existente:** aplique a migração incremental `supabase/migrations/202610290001_dicom.sql`. Ela preserva os exames existentes, adiciona metadados e reservas de upload, e ajusta o bucket privado. Projetos novos devem aplicar as duas migrações em ordem. Configure uma execução periódica de `npm run uploads:cleanup` para remover envios abandonados após a expiração das URLs assinadas; o script não altera exames confirmados.
+
+A interface usa exclusivamente ícones SVG da biblioteca [Lucide](https://lucide.dev/); não usa emojis. Para detalhes de formatos, limites e testes, veja [DICOM.md](docs/DICOM.md).

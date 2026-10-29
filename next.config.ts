@@ -1,8 +1,8 @@
 import type { NextConfig } from 'next';
+import { nodeFileTrace } from '@vercel/nft';
 const config: NextConfig = {
   poweredByHeader: false,
-  outputFileTracingIncludes: { '/api/v1/**': ['./public/fonts/*.ttf'] },
-  serverExternalPackages: ['unpdf'],
+  serverExternalPackages: ['unpdf', '@itk-wasm/dicom', 'itk-wasm', 'dicom-parser', 'sharp'],
   async headers() {
     return [
       {
@@ -23,4 +23,19 @@ const config: NextConfig = {
     ];
   },
 };
-export default config;
+export default async function createConfig(): Promise<NextConfig> {
+  const { fileList } = await nodeFileTrace(['scripts/dicom-worker.mjs'], {
+    base: process.cwd(),
+    conditions: ['node', 'import', 'default'],
+  });
+  return {
+    ...config,
+    outputFileTracingIncludes: {
+      '/api/v1/**': [
+        './public/fonts/*.ttf',
+        ...Array.from(fileList, (p) => './' + p),
+        './node_modules/@itk-wasm/dicom/dist/pipelines/**/*',
+      ],
+    },
+  };
+}

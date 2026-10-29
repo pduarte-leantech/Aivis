@@ -12,17 +12,22 @@
     "test:e2e": "playwright test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "bootstrap:admin": "node --env-file=.env.local scripts/bootstrap-admin.mjs"
+    "bootstrap:admin": "node --env-file=.env.local scripts/bootstrap-admin.mjs",
+    "verify:dicom-runtime": "node scripts/verify-dicom-runtime.mjs",
+    "uploads:cleanup": "node --env-file=.env.local scripts/cleanup-uploads.mjs"
   },
   "dependencies": {
+    "@itk-wasm/dicom": "7.6.4",
     "@pdf-lib/fontkit": "1.1.1",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.118.0",
+    "dicom-parser": "1.8.21",
     "lucide-react": "1.61.0",
     "next": "16.4.3",
     "pdf-lib": "1.17.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "sharp": "0.35.5",
     "unpdf": "1.9.1",
     "zod": "4.6.7"
   },
@@ -33,6 +38,7 @@
     "@types/node": "26.6.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "@vercel/nft": "1.11.0",
     "eslint": "9.39.5",
     "eslint-config-next": "16.4.3",
     "prettier": "3.9.10",
@@ -42,5 +48,8 @@
   "engines": {
     "node": "24.x"
   },
-  "type": "module"
+  "type": "module",
+  "overrides": {
+    "decompress": "npm:@xhmikosr/decompress@11.1.4"
+  }
 }

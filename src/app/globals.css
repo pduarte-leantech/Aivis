@@ -2573,3 +2573,88 @@ tbody tr:hover {
 .art-floating {
   bottom: 45px;
 }
+.exam-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.exam-file > button:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.exam-file > button:first-child > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+.exam-file > button:first-child > svg {
+  color: #5f7065;
+}
+.dicom-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 12px;
+  color: #52665d;
+}
+.dicom-info > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.dicom-stage {
+  min-height: 320px;
+  background: #111b19;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #d9e8e0;
+  overflow: hidden;
+}
+.dicom-stage > img {
+  max-width: 100%;
+  max-height: 60vh;
+  height: auto;
+  width: auto;
+  object-fit: contain;
+}
+.dicom-stage > p,
+.dicom-stage > span {
+  padding: 30px;
+  font-size: 13px;
+  line-height: 1.9;
+  text-align: center;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.dicom-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.dicom-controls > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dicom-controls label {
+  font-size: 11px;
+}
+.dicom-controls select {
+  font-size: 12px;
+  max-width: 280px;
+}
+.dicom-info {
+  flex-wrap: wrap;
+}
